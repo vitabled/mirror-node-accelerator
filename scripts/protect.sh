@@ -1318,12 +1318,27 @@ SS_TOTAL="$(ss -tnH state established 2>/dev/null | wc -l)"
 [ "$CT_TOTAL" -ge $((SS_TOTAL * COARSE_MULT)) ] || exit 0
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-# живые established по src-IP клиента
+# Живые established по src-IP клиента.
+# `::ffff:` снимаем обязательно: когда сервис слушает на `*:443` (v6-сокет принимает
+# v4-mapped), ss печатает пиров как `[::ffff:1.2.3.4]`, а conntrack — голым `1.2.3.4`.
+# Без нормализации лукап живых сокетов не матчится НИКОГДА, live всегда читается как 0,
+# и LIVE_FLOOR — вся CGNAT-защита — не срабатывает: эвиктится любой холдер выше
+# PHANTOM_MIN. Ровно та же нормализация давно стоит в harvest_node_port_peers().
 ss -tnH state established 2>/dev/null | awk '{print $NF}' \
-  | sed -E 's/:[0-9]+$//; s/^\[//; s/\]$//' | sort | uniq -c > "$TMP/live"
-# conntrack по ПЕРВОМУ src= (это клиентский IP) — только tcp
+  | sed -E 's/:[0-9]+$//; s/^\[//; s/\]$//; s/^::ffff:([0-9.]+)$/\1/' | sort | uniq -c > "$TMP/live"
+# Адреса, которые НЕ могут быть источником входящей атаки и потому не бывают кандидатами.
+# Первый src= в записи conntrack — клиентский IP только для ВХОДЯЩИХ соединений; для
+# исходящих (xray → сайт) это адрес самой ноды, а на relay исходящие доминируют. Без
+# фильтра нода становится крупнейшим «фантом-холдером»: банит сама себя, и `conntrack -D`
+# по своему адресу сносит состояние всех проксируемых сессий разом. Приватные диапазоны
+# отсекаем по той же причине — там живут docker-бриджи и туннельные плечи.
+SELF_RE="$( { ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+              printf '127.0.0.1\n::1\n'; } | sed 's/\./\\./g' | paste -sd'|' - )"
+PRIV_RE='^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|f[cd]|fe[89ab])'
+# conntrack по ПЕРВОМУ src= — только tcp, без собственных и служебных адресов
 conntrack -L -p tcp 2>/dev/null \
   | awk '{for(i=1;i<=NF;i++) if($i ~ /^src=/){print substr($i,5); break}}' \
+  | grep -Ev "^(${SELF_RE})$" | grep -Ev "$PRIV_RE" \
   | sort | uniq -c | sort -rn > "$TMP/ct"
 
 is_white() {  # в whitelist na_filter или в fleet-сете?
@@ -1452,7 +1467,7 @@ done
 echo "── Топ-$N удалённых IP по established TCP на портах: $PORTS ──"
 ss -Hnt state established "( $filt )" 2>/dev/null \
     | awk '{print $5}' \
-    | sed -E 's/:[0-9]+$//; s/^\[//; s/\]$//' \
+    | sed -E 's/:[0-9]+$//; s/^\[//; s/\]$//; s/^::ffff:([0-9.]+)$/\1/' \
     | sort | uniq -c | sort -rn | head -n "$N"
 TT
 chmod +x /usr/local/sbin/na-fw-top-talkers
