@@ -705,20 +705,24 @@ else
         apt_install logrotate || warn "logrotate не доустановился — ротация работать не будет"
     fi
 
-    # Маски, которые уже держит ЧУЖАЯ станса, забирать себе нельзя: logrotate на дубликат
-    # пути отвечает «duplicate log entry» и пропускает НАШ файл целиком. Коварно то, что
-    # проверка одного файла (`logrotate -d <наш>`) при этом рапортует, что всё в порядке.
+    # Маски, уже покрытые ЧУЖОЙ стансой, забирать себе нельзя: logrotate на дубликат пути
+    # отвечает «duplicate log entry», целиком пропускает ту стансу, которой файл достался
+    # вторым, и выходит с ошибкой — na-logrotate.service уходит в failed при внешне
+    # здоровом таймере. Сверять маски СТРОКАМИ бесполезно: logrotate дедуплицирует по
+    # РАСКРЫТЫМ файлам, и чужая станса с явными путями или другим глобом проходит мимо
+    # текстового сравнения. Единственный честный арбитр — сам logrotate (`-d` по ВСЕМУ
+    # набору): пишем стансу целиком, спрашиваем его и конфликтные маски отдаём чужим
+    # стансам — у них может быть сигнальный reload вместо copytruncate, им и владеть.
+    # read -a, а не голый word-split: иначе шелл сам раскроет глобы по живым файлам,
+    # и в стансу лягут ЯВНЫЕ пути — лог нового vhost'а никогда не начнёт ротироваться.
     _want=(); _dup=()
-    for _m in $NA_LOG_PATHS; do
-        if grep -rqsF -- "$_m" /etc/logrotate.d/ --exclude="$(basename "$LR_CONF")" 2>/dev/null; then
-            _dup+=("$_m")
-        else
-            _want+=("$_m")
-        fi
-    done
+    read -r -a _want <<<"$NA_LOG_PATHS"
 
-    if [[ "${#_want[@]}" -gt 0 ]]; then
-        backup_file "$LR_CONF"
+    _na_lr_write() {
+        if [[ "${#_want[@]}" -eq 0 ]]; then
+            rm -f "$LR_CONF"
+            return 0
+        fi
         {
             printf '%s ' "${_want[@]}"
             cat <<LRC
@@ -736,15 +740,46 @@ else
 LRC
         } > "$LR_CONF"
         chmod 0644 "$LR_CONF"
-        ok "стансa $LR_CONF: ${_want[*]} (maxsize $NA_LOG_MAXSIZE, rotate $NA_LOG_ROTATE)"
-    else
-        rm -f "$LR_CONF"
-        info "все заданные пути уже покрыты другими стансами — свою не создаю"
-    fi
+    }
+
     # copytruncate, а не reopen-сигнал: nginx и ядро ноды живут в контейнерах, послать им
     # USR1 из хостовой ротации некому.
+    backup_file "$LR_CONF" "$BACKUP"
+    _na_lr_write
+
+    if command -v logrotate >/dev/null 2>&1; then
+        while [[ "${#_want[@]}" -gt 0 ]]; do
+            _dupf="$({ logrotate -d /etc/logrotate.conf 2>&1 || true; } \
+                     | sed -n 's/.*duplicate log entry for //p' | sort -u)"
+            [[ -n "$_dupf" ]] || break
+            _keep=()
+            for _m in "${_want[@]}"; do
+                _hit=0
+                while IFS= read -r _f; do
+                    [[ -n "$_f" ]] || continue
+                    # shellcheck disable=SC2053  # маска без кавычек — намеренный glob-матч
+                    if [[ "$_f" == $_m ]]; then _hit=1; break; fi
+                done <<<"$_dupf"
+                if [[ "$_hit" -eq 1 ]]; then _dup+=("$_m"); else _keep+=("$_m"); fi
+            done
+            if [[ "${#_keep[@]}" -eq "${#_want[@]}" ]]; then
+                # наших масок дубликаты не задевают — это конфликт между чужими
+                # стансами, чинить его не нам
+                warn "дубликаты путей вне наших масок — часть чужих станс пропускается: logrotate -d /etc/logrotate.conf"
+                break
+            fi
+            _want=("${_keep[@]}")
+            _na_lr_write
+        done
+    fi
+
+    if [[ "${#_want[@]}" -gt 0 ]]; then
+        ok "стансa $LR_CONF: ${_want[*]} (maxsize $NA_LOG_MAXSIZE, rotate $NA_LOG_ROTATE)"
+    else
+        info "все заданные пути уже покрыты другими стансами — свою не создаю"
+    fi
     for _m in "${_dup[@]}"; do
-        warn "путь $_m уже покрыт чужой стансой в /etc/logrotate.d — проверь, что там задан maxsize"
+        warn "маска $_m уже покрыта чужой стансой в /etc/logrotate.d — отдана ей; проверь, что там задан maxsize"
     done
 
     cat > /etc/systemd/system/na-logrotate.service <<'EOF'
@@ -772,13 +807,6 @@ EOF
     systemctl enable --now na-logrotate.timer >/dev/null 2>&1 \
         && ok "na-logrotate.timer: прогон $NA_LOG_INTERVAL" \
         || warn "na-logrotate.timer не включился"
-
-    # Валидировать можно только весь набор: конфликт масок виден лишь в общем прогоне.
-    if command -v logrotate >/dev/null 2>&1; then
-        if logrotate -d /etc/logrotate.conf 2>&1 | grep -qi 'duplicate log entry'; then
-            warn "logrotate сообщает о дубликате путей — часть станс будет пропущена: logrotate -d /etc/logrotate.conf"
-        fi
-    fi
 fi
 
 # ─── 9. THP off ──────────────────────────────────────────────────────────────

@@ -108,7 +108,14 @@ backup_dir() {
     mkdir -p "$d"
     echo "$d"
 }
-backup_file() { [[ -f "$1" ]] && cp -a "$1" "$2/"; return 0; }
+# ${2:?}: одноаргументный вызов обязан падать сразу и с внятным текстом — а не
+# «$2: unbound variable» из глубины, и только на ре-ране, когда файл впервые
+# существует и [[ -f ]] перестаёт коротить цепочку (issue #24).
+backup_file() {
+    local dst="${2:?backup_file: нужен каталог назначения}"
+    [[ -f "$1" ]] && cp -a "$1" "$dst/"
+    return 0
+}
 
 apt_install() {
     export DEBIAN_FRONTEND=noninteractive
