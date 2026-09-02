@@ -283,6 +283,10 @@ B
         ips+=("$ip"); hitsarr+=("$h"); [[ "$h" -gt "$maxhits" ]] && maxhits="$h"
     done < <(top_ips_raw)
     enrich_asn "${ips[@]}"
+    # Колонка ASN остаётся «?», когда обогащать нечем: на боксе без dig И без whois
+    # отчёт молча выглядит иначе, чем у соседней ноды, и причина неочевидна.
+    command -v dig >/dev/null 2>&1 || command -v whois >/dev/null 2>&1 \
+        || info "ASN не обогащён: нет dig/whois (best-effort — колонка ASN останется '?')"
     printf "  %-18s %6s  %-22s %s\n" "IP" "hits" "ASN" "вердикт"
     for i in "${!ips[@]}"; do
         ip="${ips[$i]}"; h="${hitsarr[$i]}"
