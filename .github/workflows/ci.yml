@@ -46,6 +46,16 @@ jobs:
         # переводу строки сломать --json (#27); tput молчит не в терминале (#28); conf
         # с замороженным старым дефолтом → warn / NA_ADOPT_NEW_DEFAULTS=1 / маркер explicit (#34).
         run: bash tests/common-unit.sh
+      - name: rps unit (ИСПОЛНЯЕТ сгенерированный na-rps-setup против стабов ip/nproc/sysfs)
+        # Юнит рапортовал success при неприменённом RPS: default route на буте появляется
+        # позже network-online.target, скрипт молча выходил нулём (#30). Теперь NIC из
+        # ExecStart, ожидание маршрута, фолбэк на физические, честный отказ; плюс #28 —
+        # в перенаправленном stdout нет escape-кодов курсора.
+        run: bash tests/rps-unit.sh
+      - name: psi unit (секция PSI optimize.sh + откат против стаба update-grub)
+        # ENABLE_PSI=1 дописывает psi=1 в GRUB_CMDLINE_LINUX_DEFAULT идемпотентно, =0 не
+        # трогает файл, rollback снимает ТОЛЬКО свой psi=1 (маркер) (#37).
+        run: bash tests/psi-unit.sh
 
   # ── Smoke-тесты на матрице дистрибутивов ────────────────────────────────────
   # Ловит ровно тот класс регрессий, из-за которых появился этот PR: установка
