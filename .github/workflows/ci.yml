@@ -199,7 +199,7 @@ jobs:
           F="$(ls -t /tmp/na_filter.*.nft | head -1)"
           [ "$(grep -o '203\.0\.113\.7' "$F" | wc -l)" -eq 1 ] || { echo "дубль уехал в ruleset"; exit 1; }
           echo "ok: дедуп + warn о широком CIDR"
-      - name: protect.sh DRY_RUN — замороженный дефолт в protect.conf (#34): warn, adopt, explicit
+      - name: "protect.sh DRY_RUN — замороженный дефолт в protect.conf (#34): warn, adopt, explicit"
         run: |
           mkdir -p /etc/node-accelerator
           printf '# node-accelerator — сохранённый конфиг ноды @ 2026-07-11\n: "${CROWDSEC_STRICT:=0}"\n' > /etc/node-accelerator/protect.conf
