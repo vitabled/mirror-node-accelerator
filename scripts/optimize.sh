@@ -824,8 +824,10 @@ NA_LOG_ROTATE="${NA_LOG_ROTATE:-4}"
 NA_LOG_INTERVAL="${NA_LOG_INTERVAL:-hourly}"
 LR_CONF=/etc/logrotate.d/na-node-logs
 
+LR_CEDED_N=0
 if [[ "$ENABLE_LOGROTATE" != "1" ]]; then
     info "ротация логов пропущена (ENABLE_LOGROTATE=0)"
+    rm -f "$STATE_DIR/logrotate.ceded" "$STATE_DIR/logrotate.owned" 2>/dev/null || true
 else
     [[ "$NA_LOG_MAXSIZE" =~ ^[0-9]+[kKMG]$ ]] || { err "NA_LOG_MAXSIZE='$NA_LOG_MAXSIZE' — ожидается размер вида 200M"; exit 1; }
     [[ "$NA_LOG_ROTATE"  =~ ^[0-9]+$ ]]       || { err "NA_LOG_ROTATE='$NA_LOG_ROTATE' — ожидается целое число"; exit 1; }
@@ -849,7 +851,7 @@ else
     # стансам — у них может быть сигнальный reload вместо copytruncate, им и владеть.
     # read -a, а не голый word-split: иначе шелл сам раскроет глобы по живым файлам,
     # и в стансу лягут ЯВНЫЕ пути — лог нового vhost'а никогда не начнёт ротироваться.
-    _want=(); _dup=()
+    _want=(); _dup=(); _dup_paths=""
     read -r -a _want <<<"$NA_LOG_PATHS"
 
     _na_lr_write() {
@@ -892,7 +894,7 @@ LRC
                 while IFS= read -r _f; do
                     [[ -n "$_f" ]] || continue
                     # shellcheck disable=SC2053  # маска без кавычек — намеренный glob-матч
-                    if [[ "$_f" == $_m ]]; then _hit=1; break; fi
+                    if [[ "$_f" == $_m ]]; then _hit=1; _dup_paths+="${_dup_paths:+$'\n'}$_f"; fi
                 done <<<"$_dupf"
                 if [[ "$_hit" -eq 1 ]]; then _dup+=("$_m"); else _keep+=("$_m"); fi
             done
@@ -907,14 +909,71 @@ LRC
         done
     fi
 
+    # Уступка — не конец истории (issue #40). Раньше модуль печатал «проверь, что там
+    # задан maxsize» и рапортовал зелёным, а na-diagnose видел только активный таймер:
+    # на трёх нодах флота ротацию держала ручная станса `weekly` без maxsize — то есть
+    # никакого капа не было, а всё выглядело настроенным. Теперь: ищем стансу-владельца,
+    # САМИ смотрим в ней maxsize/size, и пишем факт уступки в состояние —
+    # его показывает na-diagnose (текст и --json), а не только лог этого прогона.
+    #
+    # _na_lr_owner <путь> — файл в /etc/logrotate.d (кроме нашего), чья маска покрывает
+    # путь. Шапка стансы — строки, начинающиеся с «/», до «{»; кавычки снимаем.
+    _na_lr_owner() {
+        local f pat
+        for f in /etc/logrotate.d/*; do
+            [[ -f "$f" && "$f" != "$LR_CONF" ]] || continue
+            while IFS= read -r pat; do
+                [[ -n "$pat" ]] || continue
+                # shellcheck disable=SC2053  # маска без кавычек — намеренный glob-матч
+                if [[ "$1" == $pat ]]; then echo "$f"; return 0; fi
+            done < <(sed -nE 's/^[[:space:]]*(\/[^{]*).*/\1/p' "$f" 2>/dev/null | tr -d '"' | tr ' \t' '\n\n')
+        done
+        return 1
+    }
+    # _na_lr_cap <файл-стансы> — есть ли в стансе ограничение по размеру: maxsize (по
+    # размеру ИЛИ периоду) либо size (только по размеру). minsize капом НЕ является —
+    # он лишь запрещает ротировать мелкие файлы.
+    _na_lr_cap() { grep -qE '^[[:space:]]*(maxsize|size)[[:space:]]+[0-9]' "$1" 2>/dev/null; }
+
+    mkdir -p "$STATE_DIR"
+    : > "$STATE_DIR/logrotate.ceded.tmp"
+    for _m in "${_dup[@]}"; do
+        # владельца ищем по РЕАЛЬНЫМ путям, которые logrotate назвал дубликатами и
+        # которые покрыты этой маской: у чужой стансы маска может быть другой
+        _owner=""
+        while IFS= read -r _f; do
+            [[ -n "$_f" ]] || continue
+            # shellcheck disable=SC2053
+            [[ "$_f" == $_m ]] || continue
+            _owner="$(_na_lr_owner "$_f" || true)"; [[ -n "$_owner" ]] && break
+        done <<<"${_dup_paths:-}"
+        if [[ -z "$_owner" ]]; then
+            warn "маска $_m отдана чужой стансе, но владелец в /etc/logrotate.d не найден (станса в /etc/logrotate.conf?) — проверь, что там задан maxsize"
+            printf '%s\t%s\t%s\n' "$_m" "?" "unknown" >> "$STATE_DIR/logrotate.ceded.tmp"
+        elif _na_lr_cap "$_owner"; then
+            info "маска $_m уже покрыта чужой стансой $_owner — отдана ей (там есть maxsize/size — кап на размер работает)"
+            printf '%s\t%s\t%s\n' "$_m" "$_owner" "capped" >> "$STATE_DIR/logrotate.ceded.tmp"
+        else
+            # `|| true` обязателен: под set -e -o pipefail пустой grep ронял бы весь прогон
+            _period="$(grep -owE '(hourly|daily|weekly|monthly|yearly)' "$_owner" 2>/dev/null | head -1 || true)"
+            warn "маска $_m отдана чужой стансе $_owner: там ${_period:-период не задан} БЕЗ maxsize/size — размер логов ничем не ограничен; добавь в неё 'maxsize $NA_LOG_MAXSIZE' или сузь NA_LOG_PATHS"
+            printf '%s\t%s\t%s\n' "$_m" "$_owner" "none" >> "$STATE_DIR/logrotate.ceded.tmp"
+        fi
+    done
+    unset _owner _period
+    if [[ -s "$STATE_DIR/logrotate.ceded.tmp" ]]; then
+        mv -f "$STATE_DIR/logrotate.ceded.tmp" "$STATE_DIR/logrotate.ceded"
+    else
+        rm -f "$STATE_DIR/logrotate.ceded.tmp" "$STATE_DIR/logrotate.ceded"
+    fi
+    LR_CEDED_N="${#_dup[@]}"
     if [[ "${#_want[@]}" -gt 0 ]]; then
+        printf '%s\n' "${_want[@]}" > "$STATE_DIR/logrotate.owned"
         ok "стансa $LR_CONF: ${_want[*]} (maxsize $NA_LOG_MAXSIZE, rotate $NA_LOG_ROTATE)"
     else
-        info "все заданные пути уже покрыты другими стансами — свою не создаю"
+        rm -f "$STATE_DIR/logrotate.owned"
+        warn "все заданные пути уже покрыты чужими стансами — свою НЕ создаю: ротацию логов ноды держат они (см. выше, есть ли там maxsize); таймер ниже гоняет весь /etc/logrotate.conf, т.е. и их"
     fi
-    for _m in "${_dup[@]}"; do
-        warn "маска $_m уже покрыта чужой стансой в /etc/logrotate.d — отдана ей; проверь, что там задан maxsize"
-    done
 
     cat > /etc/systemd/system/na-logrotate.service <<'EOF'
 [Unit]
@@ -1028,3 +1087,6 @@ if [[ "$REBOOT_NEEDED" == "1" ]]; then
     fi
 fi
 warn "Часть лимитов применится после перелогина/reboot (DefaultLimit* для systemd-сервисов)."
+if [[ "${LR_CEDED_N:-0}" -gt 0 ]]; then
+    warn "РОТАЦИЯ ЛОГОВ: $LR_CEDED_N маск(и) отданы чужим стансам logrotate — тулкит их НЕ ротирует; кто и с каким капом: cat $STATE_DIR/logrotate.ceded (см. предупреждения секции «ротация логов ноды»)"
+fi

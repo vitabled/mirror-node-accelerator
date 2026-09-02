@@ -30,7 +30,10 @@
   сертификат). Штатной ротации мало: `maxsize` проверяется только в момент запуска logrotate, а тот
   суточный, поэтому файл проскакивает лимит между прогонами — наблюдалось превышение заявленного
   капа в девять раз. Ставится сам пакет `logrotate` (на минимальных образах его нет, и станса лежит
-  мёртвым грузом), станса на пути ноды и `na-logrotate.timer` с часовым прогоном.
+  мёртвым грузом), станса на пути ноды и `na-logrotate.timer` с часовым прогоном. Маску, которую уже
+  держит чужая станса, тулкит отдаёт ей (спор решает сам `logrotate`), **сам проверяет в ней
+  `maxsize`/`size`** и пишет факт уступки в состояние — `na-diagnose` показывает, кто ротирует и есть ли
+  кап, вместо зелёного «таймер активен».
 
 ### 🛡 Защита (`scripts/protect.sh`)
 `nftables`-движок в **своей** таблице `inet na_filter` (не `flush ruleset` — сосуществует с CrowdSec и Docker):
@@ -86,7 +89,7 @@
 Read-only отчёт: ядро/BBR, sysctl, лимиты, conntrack, NIC/RPS, swap/THP/governor, firewall, CrowdSec, порты, RTT — с итогом ✔/▲/✘ и рекомендациями. Плюс сенсоры **стека ноды**: контейнер `remnanode` (статус/рестарты/`SPAWN_ERROR` за час — ловит коллизию node-address в панели), **рассинхрон порта node-агента с файрволом** (агент слушает `:3000`, а strict-правила держат `:2222` → «нода недоступна» для панели; в отчёте — с командой пожарного фикса, в `--json` — `node_port_detected`/`node_port_fw`), **сроки TLS-сертификатов** (LE/acme.sh/`/opt/*/certs`; серты, снятые с renew в acme.sh, не считаются; свои пути — `NA_CERT_PATHS="глоб1 глоб2"`), **whitelist в трёх местах** (живой сет vs `na_filter.nft` vs `protect.conf`: адрес, который переживёт ребут, но не ре-ран `protect`, называется по имени), **датчик `CONN_LIMIT` по тому же срезу, что и правило** (только входящие на сервисные порты, без loopback/whitelist — раньше на ноде с внутренним nginx он горел всегда), **PSI** (различает «не собран», «выключен в сборке ядра» и «работает»), **ретеншен journald в часах**, **замороженные дефолты в сохранённом конфиге**, **свежесть fleet-sync/blocklist**, IPv6 default-route, UDP `RcvbufErrors` (QUIC/Hysteria2). После установки доступна как команда **`na-diagnose`** (`--json` для мониторинга/панели — теперь с `na_version`, `hostname`, `uptime_s`, `load1`, `mem_used_pct`, WAN rx/tx-байтами; `--retrans [--window N]` — разбор причин TCP-retransmits).
 
 ### 🔥 Форензика атак (`scripts/na-report.sh`)
-Read-only: кто/откуда/чем/когда — из журнала ядра, nft-сетов и CrowdSec. **`na-report`** (человекочитаемо) или **`na-report --json`**: `drops_by_reason`, `timeline`, `top_ips` с вердиктом, `top_asn` (ASN/гео — best-effort через Team Cymru whois). Флаги: `--hours N`, `--top N`, `--ip <addr>`.
+Read-only: кто/откуда/чем/когда — из журнала ядра, nft-сетов и CrowdSec. **`na-report`** (человекочитаемо) или **`na-report --json`**: `drops_by_reason`, `timeline`, `top_ips` с вердиктом, `top_asn` (ASN/гео — best-effort через Team Cymru whois). Флаги: `--hours N`, `--top N`, `--ip <addr>`. Журнал читается по всем загрузкам (`-b all`), а не с момента ребута; в шапке — фактическая глубина журнала (`journal_span_h`), чтобы «событий мало» не путать с «журнал вытеснен».
 
 ---
 
@@ -118,11 +121,11 @@ curl -fsSL https://raw.githubusercontent.com/jestivald/node-accelerator/main/ins
 
 # прод-режим: пиньте тег через NA_REF — компрометация ветки main тогда не утечёт
 # сразу на весь флот (скрипты тянутся из того же тега):
-export NA_REF=v4.1
+export NA_REF=v4.1.1
 curl -fsSL "https://raw.githubusercontent.com/jestivald/node-accelerator/$NA_REF/install.sh" | sudo -E bash -s all
 
 # максимум: + проверка minisign-подписей модулей (подписи лежат в дереве с v3.6):
-export NA_REF=v4.1 NA_REQUIRE_SIG=1 \
+export NA_REF=v4.1.1 NA_REQUIRE_SIG=1 \
        NA_MINISIGN_PUBKEY="RWQrJghT9nkdBC3ntiEXF29zrS8o429WhObHKq6I7CKoftVDhQBrBscu"
 curl -fsSL "https://raw.githubusercontent.com/jestivald/node-accelerator/$NA_REF/install.sh" | sudo -E bash -s all
 ```

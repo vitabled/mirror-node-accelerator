@@ -217,11 +217,11 @@ expect "psi=1 на месте" test "$(cmdline)" = 'GRUB_CMDLINE_LINUX_DEFAULT="
 expect "update-grub не звался" test "$(ug_calls)" -eq 0
 
 # ── Регрессия: на v4.0.1 ручки не было вовсе ───────────────────────────────────
-echo "== код v4.0.1 (регрессия; пропускается без ветки main) =="
-if git -C "$REPO_ROOT" show main:scripts/optimize.sh > "$T/old-optimize.sh" 2>/dev/null; then
+echo "== код v4.0.1 (регрессия; пропускается без тега v4.0.1) =="
+if git -C "$REPO_ROOT" show v4.0.1:scripts/optimize.sh > "$T/old-optimize.sh" 2>/dev/null; then
     expect_not "в v4.0.1 секции PSI нет" grep -q '^# ─── 2b\.' "$T/old-optimize.sh"
     expect_not "в v4.0.1 ручки ENABLE_PSI нет" grep -q 'ENABLE_PSI' "$T/old-optimize.sh"
-    git -C "$REPO_ROOT" show main:scripts/rollback.sh > "$T/old-rollback.sh" 2>/dev/null || true
+    git -C "$REPO_ROOT" show v4.0.1:scripts/rollback.sh > "$T/old-rollback.sh" 2>/dev/null || true
     expect_not "в v4.0.1 откат psi=1 не делался" grep -q 'psi=1' "$T/old-rollback.sh"
 else
     echo "  • ветка main недоступна — сравнение с v4.0.1 пропущено"

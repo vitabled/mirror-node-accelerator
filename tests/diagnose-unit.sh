@@ -72,6 +72,7 @@ sandbox_paths() {
         -e "s#/var/lib/docker#$T/var/lib/docker#g" \
         -e "s#/etc/systemd/system/#$T/systemd/#g" \
         -e "s#/etc/logrotate.conf#$T/etc/logrotate.conf#g" \
+        -e "s#/etc/logrotate.d#$T/etc/logrotate.d#g" \
         -e "s#/etc/os-release#$T/etc/os-release#g" \
         -e "s#/tmp/na-fw-safety.pid#$T/na-fw-safety.pid#g" \
         -e "s#/etc/letsencrypt#$T/etc/letsencrypt#g" \
@@ -276,6 +277,7 @@ cat > "$BIN/systemctl" <<'SC'
 #!/bin/sh
 case "$*" in
   "is-active --quiet na-rps.service")                exit 0 ;;   # active (exited)
+  "is-active --quiet na-logrotate.timer")            exit 0 ;;   # таймер активен — станса отдельно (#40)
   "is-active --quiet crowdsec")                      exit 0 ;;
   "is-active --quiet crowdsec-firewall-bouncer")     exit 0 ;;
   "is-enabled --quiet na-firewall.service")          exit 0 ;;
@@ -284,6 +286,13 @@ case "$*" in
 esac
 exit 1
 SC
+
+# logrotate — только чтобы diagnose не ушёл в ветку «не установлен» раньше сенсора стансы (#40);
+# `-d` по пустому conf в песочнице → тишина, дубликатов нет.
+cat > "$BIN/logrotate" <<'LR'
+#!/bin/sh
+exit 0
+LR
 
 cat > "$BIN/uname" <<'UN'
 #!/bin/sh
@@ -458,6 +467,30 @@ mv "$T/opt.off" "$T/opt"; mv "$T/root.off" "$T/root"
 echo "== 6. CrowdSec: 3 решения = 3, а не 4 (#32) =="
 env TERM=dumb NA_TEST_DECISIONS=3 "$WBASH" "$DIAG" > "$T/out6.txt" 2>/dev/null || true
 grep_ok "три решения считаются как 3" "CrowdSec decisions (активные баны): 3" "$T/out6.txt"
+
+echo "== 7. ротация: «таймер активен» ≠ «станса есть» (#40) =="
+LRSTATE="$T/var/lib/node-accelerator"; mkdir -p "$T/etc/logrotate.d"
+printf '/var/log/nginx/*.log\t/etc/logrotate.d/vpn-node-logs\tnone\n' > "$LRSTATE/logrotate.ceded"
+printf '/var/log/remnanode/*.log\n' > "$LRSTATE/logrotate.owned"
+printf '/var/log/remnanode/*.log {\n    daily\n}\n' > "$T/etc/logrotate.d/na-node-logs"
+env "$SSHENV" TERM=dumb "$WBASH" "$DIAG" --json > "$T/out7.json" 2>/dev/null || true
+check "json: logrotate_ceded_nocap=1"                 1 "$(jget "$T/out7.json" logrotate_ceded_nocap)"
+check "json: logrotate_ceded_masks — отданная маска"  "/var/log/nginx/*.log" "$(jget "$T/out7.json" logrotate_ceded_masks)"
+check "json: logrotate_owned_masks — наша маска"      "/var/log/remnanode/*.log" "$(jget "$T/out7.json" logrotate_owned_masks)"
+env "$SSHENV" TERM=dumb "$WBASH" "$DIAG" > "$T/out7.txt" 2>/dev/null || true
+grep_ok  "текст: ▲ уступка, владелец без капа назван" "vpn-node-logs (БЕЗ maxsize/size!)" "$T/out7.txt"
+grep_not "текст: зелёного «станса на месте» при уступке нет" "часовой таймер активен, станса на месте" "$T/out7.txt"
+# уступок нет, но стансы тоже нет (пустая) — таймер крутится вхолостую
+rm -f "$LRSTATE/logrotate.ceded" "$LRSTATE/logrotate.owned"; : > "$T/etc/logrotate.d/na-node-logs"
+env "$SSHENV" TERM=dumb "$WBASH" "$DIAG" > "$T/out7b.txt" 2>/dev/null || true
+grep_ok  "текст: таймер активен, стансы нет → ▲"     "na-node-logs нет" "$T/out7b.txt"
+check    "json: без уступок ceded_nocap=0"            0 "$(env "$SSHENV" TERM=dumb "$WBASH" "$DIAG" --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["logrotate_ceded_nocap"])')"
+# станса есть, уступок нет — ✔
+printf '/var/log/remnanode/*.log {\n    daily\n}\n' > "$T/etc/logrotate.d/na-node-logs"
+printf '/var/log/remnanode/*.log\n' > "$LRSTATE/logrotate.owned"
+env "$SSHENV" TERM=dumb "$WBASH" "$DIAG" > "$T/out7c.txt" 2>/dev/null || true
+grep_ok  "текст: станса на месте → ✔ с перечнем масок" "часовой таймер активен, станса на месте (/var/log/remnanode/*.log)" "$T/out7c.txt"
+rm -f "$LRSTATE/logrotate.owned"
 
 echo
 echo "  прогон: $PASS ok, $FAIL fail"
