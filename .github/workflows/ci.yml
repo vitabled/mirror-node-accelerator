@@ -56,6 +56,11 @@ jobs:
         # ENABLE_PSI=1 дописывает psi=1 в GRUB_CMDLINE_LINUX_DEFAULT идемпотентно, =0 не
         # трогает файл, rollback снимает ТОЛЬКО свой psi=1 (маркер) (#37).
         run: bash tests/psi-unit.sh
+      - name: protect unit (na-fw-status / add_wl / сборка PORTSCAN / бюджет журнала против стабов)
+        # Счётчики na-fw-status считают адреса (#32); дубли и широкие CIDR в WHITELIST
+        # замечаются, /32 нормализуется, дедуп доезжает до nft/CrowdSec-yaml (#38);
+        # PORTSCAN_LOG_RATE=0 снимает лог, не бан; бюджет журнала считается (#35).
+        run: bash tests/protect-unit.sh
 
   # ── Smoke-тесты на матрице дистрибутивов ────────────────────────────────────
   # Ловит ровно тот класс регрессий, из-за которых появился этот PR: установка
@@ -170,6 +175,30 @@ jobs:
           DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 FLEET_SYNC=1 \
             REMNAWAVE_NODES_URL=https://panel.example.com/fleet/nodes.json \
             bash scripts/protect.sh
+      - name: protect.sh DRY_RUN (PORTSCAN_LOG_RATE=0 — лог анти-скана не ставится, бан остаётся)
+        run: |
+          DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 PORTSCAN_LOG_RATE=0 bash scripts/protect.sh
+          F="$(ls -t /tmp/na_filter.*.nft | head -1)"
+          grep -q '\[na portscan\]' "$F" && { echo "лог анти-скана не должен ставиться при PORTSCAN_LOG_RATE=0"; exit 1; }
+          grep -q 'add @autoban_v4' "$F" || { echo "бан за скан пропал вместе с логом"; exit 1; }
+          echo "ok: лог снят, бан на месте"
+      - name: protect.sh DRY_RUN (дефолтный рейт лога анти-скана → nft -c) + отказ на кривом PORTSCAN_LOG_RATE
+        run: |
+          DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 bash scripts/protect.sh
+          F="$(ls -t /tmp/na_filter.*.nft | head -1)"
+          grep -q 'limit rate 60/minute burst 30 packets log prefix "\[na portscan\] "' "$F" || { echo "лог анти-скана не на 60/minute burst 30"; exit 1; }
+          if PORTSCAN_LOG_RATE=abc DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 bash scripts/protect.sh 2>/dev/null; then
+            echo "валидация НЕ сработала на кривом PORTSCAN_LOG_RATE"; exit 1
+          else echo "ok: кривой PORTSCAN_LOG_RATE отвергнут"; fi
+      - name: protect.sh DRY_RUN (дубль и широкий CIDR в WHITELIST → warn, в ruleset один адрес)
+        run: |
+          OUT="$(DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 \
+                 WHITELIST='203.0.113.7,203.0.113.7,203.0.113.0/24' bash scripts/protect.sh)"
+          echo "$OUT" | grep -q 'указан дважды' || { echo "дубль в WHITELIST не замечен"; exit 1; }
+          echo "$OUT" | grep -q 'ПОЛНЫЙ обход защиты' || { echo "широкий CIDR не замечен"; exit 1; }
+          F="$(ls -t /tmp/na_filter.*.nft | head -1)"
+          [ "$(grep -o '203\.0\.113\.7' "$F" | wc -l)" -eq 1 ] || { echo "дубль уехал в ruleset"; exit 1; }
+          echo "ok: дедуп + warn о широком CIDR"
       - name: protect.sh DRY_RUN — замороженный дефолт в protect.conf (#34): warn, adopt, explicit
         run: |
           mkdir -p /etc/node-accelerator
