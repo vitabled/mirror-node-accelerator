@@ -61,6 +61,12 @@ jobs:
         # замечаются, /32 нормализуется, дедуп доезжает до nft/CrowdSec-yaml (#38);
         # PORTSCAN_LOG_RATE=0 снимает лог, не бан; бюджет журнала считается (#35).
         run: bash tests/protect-unit.sh
+      - name: diagnose unit (ИСПОЛНЯЕТ обе ветки diagnose против стабов docker/nft/ss/cscli/journalctl)
+        # --json валиден на хосте без контейнера node-агента (#27); счётчики autoban/suspect
+        # считают адреса (#32); датчик CONN_LIMIT без loopback/whitelist (#31); дрейф
+        # whitelist относительно protect.conf (#38); PSI три состояния (#37); серты в
+        # /opt/*/certs и снятые с renew (#39); глубина журнала (#35); RPS-юнит vs факт (#30).
+        run: bash tests/diagnose-unit.sh
 
   # ── Smoke-тесты на матрице дистрибутивов ────────────────────────────────────
   # Ловит ровно тот класс регрессий, из-за которых появился этот PR: установка
