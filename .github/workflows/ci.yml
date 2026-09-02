@@ -41,6 +41,11 @@ jobs:
         # решает вердикт самого logrotate, а не сравнение строк (#25), и глобы
         # NA_LOG_PATHS не раскрываются шеллом в явные пути.
         run: bash tests/logrotate-unit.sh
+      - name: common unit (счёт nft-сетов, json_escape, tty_tput, дрейф дефолтов conf)
+        # nft_set_count считает адреса, а не строки с 'timeout' (#32); json_escape не даёт
+        # переводу строки сломать --json (#27); tput молчит не в терминале (#28); conf
+        # с замороженным старым дефолтом → warn / NA_ADOPT_NEW_DEFAULTS=1 / маркер explicit (#34).
+        run: bash tests/common-unit.sh
 
   # ── Smoke-тесты на матрице дистрибутивов ────────────────────────────────────
   # Ловит ровно тот класс регрессий, из-за которых появился этот PR: установка
@@ -155,6 +160,18 @@ jobs:
           DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 FLEET_SYNC=1 \
             REMNAWAVE_NODES_URL=https://panel.example.com/fleet/nodes.json \
             bash scripts/protect.sh
+      - name: protect.sh DRY_RUN — замороженный дефолт в protect.conf (#34): warn, adopt, explicit
+        run: |
+          mkdir -p /etc/node-accelerator
+          printf '# node-accelerator — сохранённый конфиг ноды @ 2026-07-11\n: "${CROWDSEC_STRICT:=0}"\n' > /etc/node-accelerator/protect.conf
+          OUT="$(DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 bash scripts/protect.sh)"
+          echo "$OUT" | grep -q 'CROWDSEC_STRICT=0 записан старой версией' || { echo "нет warn о замороженном дефолте"; exit 1; }
+          OUT="$(DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 NA_ADOPT_NEW_DEFAULTS=1 bash scripts/protect.sh)"
+          echo "$OUT" | grep -q 'CROWDSEC_STRICT=0 → 1 — принят дефолт' || { echo "NA_ADOPT_NEW_DEFAULTS=1 не принял дефолт"; exit 1; }
+          OUT="$(DRY_RUN=1 REMNAWAVE_NONINTERACTIVE=1 CROWDSEC_STRICT=0 bash scripts/protect.sh)"
+          echo "$OUT" | grep -q 'записан старой версией' && { echo "warn при явном ENV — лишний"; exit 1; }
+          rm -f /etc/node-accelerator/protect.conf
+          echo "ok: дрейф дефолтов conf — warn / adopt / explicit"
       - name: CrowdSec-репозиторий резолвится (CROWDSEC_PROBE, без установки)
         run: CROWDSEC_PROBE=1 REMNAWAVE_NONINTERACTIVE=1 bash scripts/protect.sh
       - name: install.sh persist → CLI na-diagnose + na-report создаются и отдают JSON
