@@ -41,7 +41,7 @@ case "$set" in
     empty_v4)
         printf 'table inet na_filter {\n\tset empty_v4 {\n\t\ttype ipv4_addr\n\t\tsize 65536\n\t\tflags dynamic,timeout\n\t\ttimeout 30m\n\t}\n}\n';;
     one_v4)
-        printf 'table inet na_filter {\n\tset one_v4 {\n\t\ttype ipv4_addr\n\t\tsize 65536\n\t\tflags dynamic,timeout\n\t\telements = { 94.154.43.73 timeout 1d expires 1h11m50s608ms }\n\t}\n}\n';;
+        printf 'table inet na_filter {\n\tset one_v4 {\n\t\ttype ipv4_addr\n\t\tsize 65536\n\t\tflags dynamic,timeout\n\t\telements = { 198.51.100.23 timeout 1d expires 1h11m50s608ms }\n\t}\n}\n';;
     many_v4)
         printf 'table inet na_filter {\n\tset many_v4 {\n\t\ttype ipv4_addr\n\t\tsize 65536\n\t\tflags dynamic,timeout\n\t\telements = { 1.2.3.4 timeout 1d expires 1h,\n\t\t\t     5.6.7.8 timeout 1d expires 2h, 9.9.9.9 timeout 1d expires 3h,\n\t\t\t     10.0.0.1 timeout 1d expires 4h }\n\t}\n}\n';;
     empty_v6)
@@ -49,7 +49,7 @@ case "$set" in
     two_v6)
         printf 'table inet na_filter {\n\tset two_v6 {\n\t\ttype ipv6_addr\n\t\tsize 65536\n\t\tflags dynamic,timeout\n\t\telements = { 2001:db8::1 timeout 1d expires 5m30s608ms,\n\t\t\t     2001:db8:abcd::5 timeout 1d expires 1h }\n\t}\n}\n';;
     cidr_v4)
-        printf 'table inet na_filter {\n\tset cidr_v4 {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 10.0.0.0/8, 203.0.113.7, 209.112.89.0/24 }\n\t}\n}\n';;
+        printf 'table inet na_filter {\n\tset cidr_v4 {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { 10.0.0.0/8, 203.0.113.7, 192.0.2.0/24 }\n\t}\n}\n';;
     *) echo "Error: No such file or directory" >&2; exit 1;;
 esac
 NFT
