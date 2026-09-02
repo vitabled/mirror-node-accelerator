@@ -182,8 +182,8 @@ expect "и мусорных \\r тоже нет" test ! -s "$T/tty.out"
 
 # ── Регрессия: на коде v4.0.1 те же кейсы обязаны падать ───────────────────────
 # Не в каждом чекауте есть ветка main (shallow-клон CI) — тогда просто пропускаем.
-echo "== код v4.0.1 (регрессия; пропускается без ветки main) =="
-if git -C "$REPO_ROOT" show main:scripts/optimize.sh > "$T/old-optimize.sh" 2>/dev/null \
+echo "== код v4.0.1 (регрессия; пропускается без тега v4.0.1) =="
+if git -C "$REPO_ROOT" show v4.0.1:scripts/optimize.sh > "$T/old-optimize.sh" 2>/dev/null \
    && extract_rps "$T/old-optimize.sh" "$T/na-rps-old"; then
     reset_net; mk_net ens18 1
     ROUTE_AFTER=3 ROUTE_IFACE=ens18 run_rps "$T/na-rps-old"

@@ -67,6 +67,17 @@ jobs:
         # whitelist относительно protect.conf (#38); PSI три состояния (#37); серты в
         # /opt/*/certs и снятые с renew (#39); глубина журнала (#35); RPS-юнит vs факт (#30).
         run: bash tests/diagnose-unit.sh
+      - name: na-report читает журнал всех загрузок (-b all), не только текущей (#41)
+        # `-k` подразумевает `-b`: после ребута отчёт «за 24ч» молча становился «с момента
+        # загрузки» (×31 занижение на ноде флота). Оба вызова journalctl -k — с -b all.
+        run: |
+          N="$(grep -cE 'journalctl -k -b all --since' scripts/na-report.sh)"
+          [ "$N" -ge 2 ] || { echo "в na-report.sh journalctl -k без -b all (найдено $N из 2)"; exit 1; }
+          if grep -nE 'journalctl -k( |$)' scripts/na-report.sh | grep -vq -- '-b all'; then
+            echo "остался journalctl -k без -b all:"; grep -nE 'journalctl -k( |$)' scripts/na-report.sh | grep -v -- '-b all'; exit 1
+          fi
+          bash scripts/na-report.sh --json | grep -q '"journal_span_h":' || { echo "na-report --json без journal_span_h"; exit 1; }
+          echo "ok: -b all в обоих вызовах, journal_span_h в json"
 
   # ── Smoke-тесты на матрице дистрибутивов ────────────────────────────────────
   # Ловит ровно тот класс регрессий, из-за которых появился этот PR: установка

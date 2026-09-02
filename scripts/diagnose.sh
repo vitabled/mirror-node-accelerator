@@ -345,6 +345,12 @@ emit_json() {
     dklogmax="$(find /var/lib/docker/containers -xdev -type f -name '*-json.log' -printf '%s\n' 2>/dev/null | sort -rn | head -1)"
     [[ "$dklogmax" =~ ^[0-9]+$ ]] || dklogmax=0
     lrt=0; systemctl is-active --quiet na-logrotate.timer 2>/dev/null && lrt=1
+    # Таймер ≠ станса: маски, отданные чужим стансам, тулкит не ротирует, а таймер при
+    # этом активен (issue #40). owned/ceded пишет optimize; пусто = станс/уступок нет.
+    lro="$(paste -sd' ' "$STATE_DIR/logrotate.owned" 2>/dev/null || true)"; lro="${lro:-}"
+    lrc="$(cut -f1 "$STATE_DIR/logrotate.ceded" 2>/dev/null | paste -sd' ' - || true)"; lrc="${lrc:-}"
+    lrcn="$(awk -F'\t' '$3=="none"' "$STATE_DIR/logrotate.ceded" 2>/dev/null | grep -c .)"; [[ "$lrcn" =~ ^[0-9]+$ ]] || lrcn=0
+    lro="$(json_escape "$lro")"; lrc="$(json_escape "$lrc")"
 
     # Каждое строковое значение — через json_escape. Раньше каждое поле полагалось на то,
     # что источник «и так чистый», и одного сырого перевода строки из docker хватило,
@@ -375,8 +381,10 @@ emit_json() {
     # мониторинг. −1 везде = «не измерено», а не «ноль».
     printf '"max_conn_per_ip":%s,"journal_span_h":%s,"portscan_log_lines_boot":%s,"psi":"%s",' \
         "$mcpi" "$jsp" "$psl" "$psist"
-    printf '"whitelist_drift_conf":%s,"conf_stale_defaults":%s,"cert_min_file":"%s"}\n' \
+    printf '"whitelist_drift_conf":%s,"conf_stale_defaults":%s,"cert_min_file":"%s",' \
         "$wdc" "$csd" "$certf"
+    printf '"logrotate_owned_masks":"%s","logrotate_ceded_masks":"%s","logrotate_ceded_nocap":%s}\n' \
+        "$lro" "$lrc" "$lrcn"
 }
 if [[ "${1:-}" == "--json" ]]; then emit_json; exit 0; fi
 
@@ -1062,7 +1070,24 @@ DKBIG="$(find /var/lib/docker/containers -xdev -type f -name '*-json.log' -size 
 if ! command -v logrotate >/dev/null 2>&1; then
     wrn "logrotate не установлен — стансы в /etc/logrotate.d не выполняются вообще"
 elif systemctl is-active --quiet na-logrotate.timer 2>/dev/null; then
-    pass "ротация логов: часовой таймер активен"
+    # «Таймер активен» и «станса существует» — разные факты (issue #40): уступив все маски
+    # чужим стансам, optimize свою не создаёт, а таймер включает — и на трёх нодах флота
+    # диагностика светила ✔ при ротации, которую держала ручная станса weekly без maxsize.
+    LR_EN="$(sed -nE 's/.*\{ENABLE_LOGROTATE:=([^}]*)\}.*/\1/p' "$CONF_DIR/optimize.conf" 2>/dev/null | tail -1)"
+    if [[ -s "$STATE_DIR/logrotate.ceded" ]]; then
+        LR_CEDED="$(awk -F'\t' '{printf "%s%s → %s%s", (NR>1?", ":""), $1, $2, ($3=="none"?" (БЕЗ maxsize/size!)":($3=="unknown"?" (кап неизвестен)":""))}' "$STATE_DIR/logrotate.ceded" 2>/dev/null)"
+        LR_NOCAP="$(awk -F'\t' '$3=="none"' "$STATE_DIR/logrotate.ceded" 2>/dev/null | grep -c .)"
+        if [[ "${LR_NOCAP:-0}" -gt 0 ]]; then
+            wrn "ротация: таймер активен, но маски отданы чужим стансам, и у $LR_NOCAP из них НЕТ капа по размеру: $LR_CEDED — добавь maxsize в чужую стансу или сузь NA_LOG_PATHS (ре-ран optimize)"
+        else
+            wrn "ротация: таймер активен, но часть масок ротируют чужие стансы (у них кап есть): $LR_CEDED"
+        fi
+        [[ -s "$STATE_DIR/logrotate.owned" ]] && info "наша станса держит: $(paste -sd' ' "$STATE_DIR/logrotate.owned" 2>/dev/null)"
+    elif [[ "${LR_EN:-1}" == "1" && ! -s /etc/logrotate.d/na-node-logs ]]; then
+        wrn "ротация: таймер активен, а стансы /etc/logrotate.d/na-node-logs нет — тулкит ничего не ротирует (ре-ран optimize)"
+    else
+        pass "ротация логов: часовой таймер активен, станса на месте$( [[ -s "$STATE_DIR/logrotate.owned" ]] && echo " ($(paste -sd' ' "$STATE_DIR/logrotate.owned" 2>/dev/null))")"
+    fi
 else
     info "часовой таймер ротации не активен — работает только суточный logrotate.timer (maxsize проверяется раз в сутки)"
 fi
