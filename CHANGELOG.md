@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Firewall boot service ownership
+
+`protect` no longer enables the distribution's `nftables.service`. NA already
+persists its table through `na-firewall.service`; the distribution's default
+`/etc/nftables.conf` starts with `flush ruleset`, which can erase NA, CrowdSec and
+Docker tables when boot services run in a different order. Existing operator
+service settings remain unchanged. The apply test records service operations and
+checks that only the NA boot service is enabled.
+
+Existing installations should inspect `nftables.service` and its configuration.
+If it only loads the unused distribution template, disable its boot activation
+with `systemctl disable nftables.service` (without `--now` or `stop`, which can
+flush the running ruleset). Keep a deliberately managed distribution service.
+
 ## v4.1.1 — 2026-09-02
 
 Два хвоста того же аудита, заведённые уже после сборки v4.1

@@ -1084,7 +1084,10 @@ else
 fi
 systemctl daemon-reload
 systemctl enable na-firewall.service >/dev/null 2>&1 || true
-systemctl enable nftables >/dev/null 2>&1 || true
+# The distro service owns /etc/nftables.conf, whose default configuration starts
+# with `flush ruleset`. Enabling it alongside our service races at boot with
+# na_filter, CrowdSec and Docker. Only our own unit provides NA persistence;
+# leave the operator's nftables.service state unchanged, including on re-runs.
 ok "na-firewall.service включён (правила переживут reboot — если не сработает сейфти-таймер: он теперь снимает и автозагрузку)"
 
 fi  # ═══ конец блока файрвола (FW_MODE=skip его пропускает) ═══
