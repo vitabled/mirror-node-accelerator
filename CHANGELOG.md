@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Apply RPS changes to an already-active unit
+
+`optimize` now restarts its RPS setup unit after updating the helper. Previously,
+`enable --now` left an already-active `Type=oneshot` / `RemainAfterExit=yes` unit
+untouched: upgrading the boot-race fix could still leave `rps_cpus=0` until a
+manual restart or reboot, while the installer claimed success. Failed activation
+now produces a warning. A behavioral regression test models an active oneshot,
+checks the resulting CPU mask, and covers failed activation.
+
 ### Firewall boot service ownership
 
 `protect` no longer enables the distribution's `nftables.service`. NA already

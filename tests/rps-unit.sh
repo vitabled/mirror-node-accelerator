@@ -162,6 +162,53 @@ expect "NIC детектится ДО генерации юнита" \
     test "$(grep -n 'NIC="\$(default_iface || true)"' "$REPO_ROOT/scripts/optimize.sh" | cut -d: -f1)" \
        -lt "$(grep -n 'ExecStart=/usr/local/sbin/na-rps-setup' "$REPO_ROOT/scripts/optimize.sh" | cut -d: -f1)"
 
+# An active oneshot is not executed again by `enable --now`. Exercise the
+# installation section with that state, rather than calling the helper directly.
+echo "== re-run while na-rps.service is already active =="
+extract_activation() {
+    awk '
+        /^cat > \/etc\/systemd\/system\/na-rps.service <<EOF$/ { unit=1; next }
+        unit && /^EOF$/ { unit=0; activation=1; next }
+        activation && /^# .* NIC tuning/ { exit }
+        activation { print }
+    ' "$1" > "$2"
+}
+extract_activation "$REPO_ROOT/scripts/optimize.sh" "$T/activation.sh"
+cat > "$T/activation-driver.sh" <<'DRIVER'
+. "$REPO_ROOT/scripts/lib/common.sh"
+systemctl() {
+    case "$1" in
+        enable)
+            # A systemd oneshot with RemainAfterExit=yes is already active.
+            # Enabling it, with or without --now, does not run ExecStart again.
+            return 0;;
+        restart)
+            [ "${RPS_FORCE_FAILURE:-0}" = 1 ] && return 1
+            "$WBASH" "$RPS" "$NIC";;
+        *) return 0;;
+    esac
+}
+. "$ACTIVATION"
+DRIVER
+run_activation() {
+    REPO_ROOT="$REPO_ROOT" WBASH="$WBASH" RPS="$RPS" NIC=ens18 \
+        ACTIVATION="$1" "$WBASH" "$T/activation-driver.sh" > "$T/activation.out" 2>&1
+}
+reset_net; mk_net ens18 1
+run_activation "$T/activation.sh"
+expect "re-run applies RPS even when the old oneshot is active" test "$(mask_of ens18)" = 7
+reset_net; mk_net ens18 1
+RPS_FORCE_FAILURE=1 run_activation "$T/activation.sh"
+expect "failed activation is reported" grep -q 'не удалось применить RPS' "$T/activation.out"
+expect_not "failed activation must not claim RPS is enabled" grep -q 'RPS/RFS/XPS включены' "$T/activation.out"
+if git -C "$REPO_ROOT" show v4.1.1:scripts/optimize.sh > "$T/v411-optimize.sh" 2>/dev/null; then
+    extract_activation "$T/v411-optimize.sh" "$T/v411-activation.sh"
+    reset_net; mk_net ens18 1
+    run_activation "$T/v411-activation.sh"
+    expect "v4.1.1 left an already-active oneshot unapplied" test -z "$(mask_of ens18)"
+    expect "v4.1.1 nevertheless reported success" grep -q 'RPS/RFS/XPS включены' "$T/activation.out"
+fi
+
 # ── #28: ничего «курсорного» в не-терминал ──────────────────────────────────────
 echo "== курсорный вывод только в терминал (#28) =="
 expect_not "голых 'tput ' в коде optimize.sh не осталось" bare_tput "$REPO_ROOT/scripts/optimize.sh"

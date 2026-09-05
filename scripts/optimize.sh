@@ -619,8 +619,15 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now na-rps.service >/dev/null 2>&1 || true
-ok "RPS/RFS/XPS включены ($(nproc) ядер, NIC=${NIC:-автодетект на буте})"
+# An active oneshot with RemainAfterExit=yes is not run again by enable --now.
+# Re-apply the updated helper on every optimize run, including after a previous
+# boot raced with route setup and left the old unit active with rps_cpus=0.
+systemctl enable na-rps.service >/dev/null 2>&1 || true
+if systemctl restart na-rps.service >/dev/null 2>&1; then
+    ok "RPS/RFS/XPS включены ($(nproc) ядер, NIC=${NIC:-автодетект на буте})"
+else
+    warn "na-rps.service: не удалось применить RPS — проверь journalctl -u na-rps.service"
+fi
 
 # ─── 6. NIC tuning ───────────────────────────────────────────────────────────
 title "NIC tuning (ring buffer, offloads)"
