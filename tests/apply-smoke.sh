@@ -27,8 +27,8 @@ sed -e "s#/etc/systemd/system/#$T/sys/#g" \
 for c in systemctl modprobe nft systemd-run sysctl conntrack; do
     printf '#!/bin/sh\nexit 0\n' > "$T/bin/$c"; chmod +x "$T/bin/$c"
 done
-# Record service operations: protect owns na-firewall.service. Enabling the
-# distro nftables.service can flush every table at the next boot.
+# Стаб systemctl пишет журнал вызовов: protect включает СВОЙ na-firewall.service и не
+# трогает дистрибутивный nftables.service (его stop/restart/reload = flush ruleset).
 export NA_TEST_SYSTEMCTL_LOG="$T/systemctl.log"
 cat > "$T/bin/systemctl" <<'SYSTEMCTL'
 #!/bin/sh
@@ -80,9 +80,9 @@ set -e
 
 fail=0
 grep -qx 'enable na-firewall.service' "$NA_TEST_SYSTEMCTL_LOG" \
-    || { echo "[x] protect did not enable its own boot service"; fail=1; }
+    || { echo "[x] protect не включил свой na-firewall.service"; fail=1; }
 if grep -Eq '^(enable|start|restart|reload|stop|disable|mask)( [^ ]+)* nftables(\.service)?( |$)' "$NA_TEST_SYSTEMCTL_LOG"; then
-    echo "[x] protect changed the unrelated nftables.service (global ruleset risk)"
+    echo "[x] protect тронул чужой nftables.service (риск flush ruleset)"
     fail=1
 fi
 if [ "$rc" -ne 0 ]; then echo "[x] apply упал (exit $rc)"; fail=1; fi

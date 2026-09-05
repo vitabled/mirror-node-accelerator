@@ -1,29 +1,55 @@
 # Changelog
 
-## Unreleased
+## v4.1.2 — 2026-09-06
 
-### Apply RPS changes to an already-active unit
+Два дефекта ре-рана, из-за которых состояние ноды расходилось с тем, что печатал установщик
+([#44](https://github.com/jestivald/node-accelerator/pull/44)). Дефолты не менялись, новых ручек
+нет — правки только в поведении `protect` и `optimize` при повторном прогоне.
 
-`optimize` now restarts its RPS setup unit after updating the helper. Previously,
-`enable --now` left an already-active `Type=oneshot` / `RemainAfterExit=yes` unit
-untouched: upgrading the boot-race fix could still leave `rps_cpus=0` until a
-manual restart or reboot, while the installer claimed success. Failed activation
-now produces a warning. A behavioral regression test models an active oneshot,
-checks the resulting CPU mask, and covers failed activation.
+### 🟠 `protect` включал в автозагрузку чужой `nftables.service`
 
-### Firewall boot service ownership
+Персист правил через ребут у тулкита свой: `na-firewall.service` грузит `na_filter.nft` и никогда
+не трогает `/etc/nftables.conf`. Но рядом `protect` включал и дистрибутивный `nftables.service`,
+конфиг которого не писал. У этого юнита `ExecStop=nft flush ruleset`, а его дефолтный
+`/etc/nftables.conf` начинается с `flush ruleset` — то есть любой `stop`, `restart` или `reload`
+юнита, который оператор считал «нашим», сносит **все** таблицы: `na_filter`, CrowdSec, Docker.
+На самой загрузке порядок детерминирован (дистрибутивный юнит стартует в `sysinit.target`, наш —
+после `network-pre.target`), так что штатный бут не страдал; риск был в жизненном цикле юнита,
+за который никто не отвечал.
 
-`protect` no longer enables the distribution's `nftables.service`. NA already
-persists its table through `na-firewall.service`; the distribution's default
-`/etc/nftables.conf` starts with `flush ruleset`, which can erase NA, CrowdSec and
-Docker tables when boot services run in a different order. Existing operator
-service settings remain unchanged. The apply test records service operations and
-checks that only the NA boot service is enabled.
+Теперь `protect` включает только `na-firewall.service`, а состояние `nftables.service` не меняет
+ни на первом прогоне, ни на повторных: если оператор включил его сам и ведёт свой
+`/etc/nftables.conf` — это его решение.
 
-Existing installations should inspect `nftables.service` and its configuration.
-If it only loads the unused distribution template, disable its boot activation
-with `systemctl disable nftables.service` (without `--now` or `stop`, which can
-flush the running ruleset). Keep a deliberately managed distribution service.
+**Миграция существующих нод.** `nftables.service` там уже включён прошлыми версиями. Если
+`/etc/nftables.conf` — нетронутый шаблон дистрибутива, снимите юнит с автозагрузки:
+
+```bash
+systemctl disable nftables.service   # БЕЗ --now и БЕЗ stop: ExecStop = flush ruleset
+```
+
+Если конфиг ведётся осознанно — оставьте как есть.
+
+### 🟠 `optimize` на ре-ране не применял обновлённый RPS, но рапортовал успех
+
+`na-rps.service` — `Type=oneshot` с `RemainAfterExit=yes`. Для уже активного такого юнита
+`systemctl enable --now` ничем не отличается от `enable`: `ExecStart` повторно не запускается.
+Поэтому ре-ран `optimize` переписывал хелпер `na-rps-setup` (в v4.1 — фикс гонки с маршрутом
+на буте, #30), а применить его не мог: на трёхъядерной ноде после апгрейда `rps_cpus` так и
+оставался `0`, при этом установщик печатал «RPS/RFS/XPS включены».
+
+Теперь после перезаписи хелпера юнит явно перезапускается (`enable` + `restart`), и результат
+честный: `ok` только при успешном применении, иначе `warn` с отсылкой к
+`journalctl -u na-rps.service`. Перезапуск меняет только настройки очередей NIC — процесс
+VPN-ноды не трогается.
+
+### 🧪 Тесты
+
+`tests/rps-unit.sh`: секция активации `optimize` исполняется против модели уже активного
+oneshot — маска `rps_cpus` реально выставляется, отказ применения даёт `warn` без `ok`;
+регрессия против тега `v4.1.1` (маска пуста при рапорте об успехе). `tests/apply-smoke.sh`:
+стаб `systemctl` пишет журнал вызовов — `protect` включает `na-firewall.service` и не трогает
+`nftables.service` ни одной операцией.
 
 ## v4.1.1 — 2026-09-02
 

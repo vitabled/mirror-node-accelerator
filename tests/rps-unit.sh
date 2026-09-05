@@ -162,9 +162,9 @@ expect "NIC детектится ДО генерации юнита" \
     test "$(grep -n 'NIC="\$(default_iface || true)"' "$REPO_ROOT/scripts/optimize.sh" | cut -d: -f1)" \
        -lt "$(grep -n 'ExecStart=/usr/local/sbin/na-rps-setup' "$REPO_ROOT/scripts/optimize.sh" | cut -d: -f1)"
 
-# An active oneshot is not executed again by `enable --now`. Exercise the
-# installation section with that state, rather than calling the helper directly.
-echo "== re-run while na-rps.service is already active =="
+# Активный oneshot `enable --now` повторно не исполняет. Гоняем саму секцию активации
+# optimize.sh в этом состоянии, а не хелпер напрямую.
+echo "== ре-ран при уже активном na-rps.service =="
 extract_activation() {
     awk '
         /^cat > \/etc\/systemd\/system\/na-rps.service <<EOF$/ { unit=1; next }
@@ -179,8 +179,8 @@ cat > "$T/activation-driver.sh" <<'DRIVER'
 systemctl() {
     case "$1" in
         enable)
-            # A systemd oneshot with RemainAfterExit=yes is already active.
-            # Enabling it, with or without --now, does not run ExecStart again.
+            # oneshot с RemainAfterExit=yes уже активен: enable (с --now или без)
+            # ExecStart повторно не запускает.
             return 0;;
         restart)
             [ "${RPS_FORCE_FAILURE:-0}" = 1 ] && return 1
@@ -196,17 +196,17 @@ run_activation() {
 }
 reset_net; mk_net ens18 1
 run_activation "$T/activation.sh"
-expect "re-run applies RPS even when the old oneshot is active" test "$(mask_of ens18)" = 7
+expect "ре-ран применяет RPS даже при активном старом oneshot" test "$(mask_of ens18)" = 7
 reset_net; mk_net ens18 1
 RPS_FORCE_FAILURE=1 run_activation "$T/activation.sh"
-expect "failed activation is reported" grep -q 'не удалось применить RPS' "$T/activation.out"
-expect_not "failed activation must not claim RPS is enabled" grep -q 'RPS/RFS/XPS включены' "$T/activation.out"
+expect "отказ применения — warn" grep -q 'не удалось применить RPS' "$T/activation.out"
+expect_not "при отказе нет рапорта об успехе" grep -q 'RPS/RFS/XPS включены' "$T/activation.out"
 if git -C "$REPO_ROOT" show v4.1.1:scripts/optimize.sh > "$T/v411-optimize.sh" 2>/dev/null; then
     extract_activation "$T/v411-optimize.sh" "$T/v411-activation.sh"
     reset_net; mk_net ens18 1
     run_activation "$T/v411-activation.sh"
-    expect "v4.1.1 left an already-active oneshot unapplied" test -z "$(mask_of ens18)"
-    expect "v4.1.1 nevertheless reported success" grep -q 'RPS/RFS/XPS включены' "$T/activation.out"
+    expect "регрессия v4.1.1: активный oneshot не применён (маска пуста)" test -z "$(mask_of ens18)"
+    expect "регрессия v4.1.1: при этом рапортовал успех" grep -q 'RPS/RFS/XPS включены' "$T/activation.out"
 fi
 
 # ── #28: ничего «курсорного» в не-терминал ──────────────────────────────────────

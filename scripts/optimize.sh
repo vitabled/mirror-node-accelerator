@@ -619,9 +619,9 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-# An active oneshot with RemainAfterExit=yes is not run again by enable --now.
-# Re-apply the updated helper on every optimize run, including after a previous
-# boot raced with route setup and left the old unit active with rps_cpus=0.
+# Уже активный oneshot с RemainAfterExit=yes `enable --now` повторно НЕ запускает —
+# ре-ран переписывал хелпер, а rps_cpus оставался старым (после гонки с маршрутом на
+# буте — нулём), при этом печатался ok. Поэтому: enable + явный restart на каждом прогоне.
 systemctl enable na-rps.service >/dev/null 2>&1 || true
 if systemctl restart na-rps.service >/dev/null 2>&1; then
     ok "RPS/RFS/XPS включены ($(nproc) ядер, NIC=${NIC:-автодетект на буте})"
